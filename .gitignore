@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+.pytest_cache/
+out/
+state/
+logs/
+playwright-report/
+*.pyc
+*.pyo
+*.db

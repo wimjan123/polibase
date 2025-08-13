@@ -1,0 +1,2 @@
+[console_scripts]
+factbase = factbase.cli:app

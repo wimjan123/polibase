@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Factbase Search</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Factbase Transcripts</h1>
+      <input id="q" type="text" placeholder="Search (quotes, AND/OR/NOT, field: text:, title:, speaker:)" autofocus />
+      <div class="filters">
+        <label>Start <input id="start" type="date" /></label>
+        <label>End <input id="end" type="date" /></label>
+        <label>Speaker <input id="speaker" type="text" placeholder="CSV names" /></label>
+        <label>Min Duration <input id="min_duration" type="number" min="0" /></label>
+        <select id="sort">
+          <option value="relevance">Relevance</option>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+        </select>
+        <button id="searchBtn">Search</button>
+      </div>
+    </header>
+    <main>
+      <div id="results"></div>
+      <div id="pager"><button id="prev">Prev</button><span id="pageinfo"></span><button id="next">Next</button></div>
+      <div id="detail" class="hidden"></div>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>document.getElementById('q').focus();</script>
+</body>
+</html>
+
