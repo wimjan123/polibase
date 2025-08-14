@@ -49,10 +49,57 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
     import sqlite3
     from .db import connect
 
-    conn = connect(db_path)
-    init_db(conn)
+    # Connection pool for better database performance
+    connections = []
+    for _ in range(min(8, config.concurrency // 8)):  # Create connection pool
+        conn = connect(db_path)
+        init_db(conn)
+        conn.execute("PRAGMA journal_mode=WAL")  # WAL mode for better concurrency
+        conn.execute("PRAGMA synchronous=NORMAL")  # Faster writes
+        conn.execute("PRAGMA cache_size=10000")  # Larger cache
+        conn.execute("PRAGMA temp_store=memory")  # Use memory for temp storage
+        connections.append(conn)
+    
+    conn_idx = 0
+    lock = asyncio.Lock()
 
-    async with httpx.AsyncClient(follow_redirects=True, headers=client_headers) as client:
+    # Batch processing for database operations
+    db_batch = []
+    batch_size = 50
+    
+    async def flush_batch():
+        if not db_batch:
+            return
+        async with lock:
+            nonlocal conn_idx
+            conn = connections[conn_idx % len(connections)]
+            conn_idx += 1
+            
+            try:
+                conn.execute("BEGIN TRANSACTION")
+                for batch_item in db_batch:
+                    t, data = batch_item
+                    upsert_transcript(conn, t)
+                    conn.execute("DELETE FROM segments WHERE transcript_id=?", (t["id"],))
+                    bulk_insert_segments(conn, t["id"], data.get("segments", []))
+                    replace_speakers(conn, t["id"], data.get("speakers", []))
+                    replace_topics(conn, t["id"], [{"topic": x, "score": None} for x in data.get("topics", [])])
+                    replace_entities(conn, t["id"], data.get("entities", []))
+                conn.execute("COMMIT")
+                stats["updated"] += len(db_batch)
+            except Exception as e:
+                conn.execute("ROLLBACK")
+                LOGGER.error("Batch DB operation failed: %s", e)
+                stats["failed"] += len(db_batch)
+            finally:
+                db_batch.clear()
+
+    async with httpx.AsyncClient(
+        follow_redirects=True, 
+        headers=client_headers,
+        limits=httpx.Limits(max_keepalive_connections=config.concurrency, max_connections=config.concurrency * 2),
+        timeout=httpx.Timeout(60.0, connect=10.0)
+    ) as client:
         async def worker(u: str):
             async with sem:
                 try:
@@ -62,11 +109,6 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                         return
                     html = r.text
                     data = extract_transcript(html, u)
-                    # Write raw html
-                    html_dir = os.path.join(config.out_dir, "html")
-                    os.makedirs(html_dir, exist_ok=True)
-                    with open(os.path.join(html_dir, f"{data['id']}.html"), "w", encoding="utf-8") as f:
-                        f.write(html)
 
                     t = {
                         "id": data["id"],
@@ -78,23 +120,26 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                         "raw_html": html,
                         "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
                     }
-                    upsert_transcript(conn, t)
-                    # Replace segments
-                    conn.execute("DELETE FROM segments WHERE transcript_id=?", (t["id"],))
-                    bulk_insert_segments(conn, t["id"], data.get("segments", []))
-                    # Speakers/topics/entities
-                    replace_speakers(conn, t["id"], data.get("speakers", []))
-                    replace_topics(conn, t["id"], [{"topic": x, "score": None} for x in data.get("topics", [])])
-                    replace_entities(conn, t["id"], data.get("entities", []))
+                    
+                    # Add to batch instead of immediate DB write
+                    async with lock:
+                        db_batch.append((t, data))
+                        if len(db_batch) >= batch_size:
+                            await flush_batch()
+                    
                     stats["fetched"] += 1
-                    stats["updated"] += 1
                     LOGGER.info("scraped %s: %d segments", t["id"], len(data.get("segments", [])))
                 except Exception as e:  # noqa: BLE001
                     LOGGER.exception("failed %s: %s", u, e)
                     stats["failed"] += 1
 
         await asyncio.gather(*(worker(u) for u in urls))
+        
+        # Flush remaining batch
+        await flush_batch()
 
-    conn.close()
+    # Close all connections
+    for conn in connections:
+        conn.close()
     return stats
 
