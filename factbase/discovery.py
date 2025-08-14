@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import signal
 import time
 from typing import List, Set
 
@@ -13,6 +14,13 @@ from playwright.sync_api import sync_playwright
 LOGGER = logging.getLogger(__name__)
 
 DETAIL_RE = re.compile(r"^https?://rollcall\.com/factbase/.+/transcript/[a-z0-9\-]+/?$")
+
+def _save_urls(discovered: Set[str], out_dir: str) -> None:
+    """Save discovered URLs to JSONL file"""
+    out_path = os.path.join(out_dir, "discovered_urls.jsonl")
+    with open(out_path, "w", encoding="utf-8") as f:
+        for u in sorted(discovered):
+            f.write(json.dumps({"url": u}) + "\n")
 
 
 def discover_urls(
@@ -28,6 +36,16 @@ def discover_urls(
 
     discovered: Set[str] = set()
     endpoints: dict = {"start_url": start_url, "observed_endpoints": []}
+    
+    # Set up signal handler for graceful shutdown
+    def signal_handler(signum, frame):
+        LOGGER.info("Received signal %d, saving results...", signum)
+        _save_urls(discovered, out_dir)
+        LOGGER.info("Saved %d URLs before exit", len(discovered))
+        exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -97,8 +115,8 @@ def discover_urls(
                 });
             """)
             
-            # Wait longer for network requests and content loading
-            time.sleep(2.0)
+            # Wait longer for network requests and content loading (reduced to prevent hanging)
+            time.sleep(0.8)
             
             # Check if page height increased (new content loaded)
             new_height = page.evaluate("document.body.scrollHeight")
@@ -109,6 +127,11 @@ def discover_urls(
             new_in_cycle = len(discovered) - last_count
             last_count = len(discovered)
             LOGGER.info("discover: total=%d new=%d height_grew=%s idle=%d", last_count, new_in_cycle, height_increased, idle)
+            
+            # Save periodically every 500 links
+            if len(discovered) % 500 == 0 and len(discovered) > 0:
+                _save_urls(discovered, out_dir)
+                LOGGER.info("Saved %d URLs to file", len(discovered))
             
             # Log network requests if any
             if network_requests:
@@ -141,11 +164,9 @@ def discover_urls(
 
         browser.close()
 
-    # Write JSONL
-    out_path = os.path.join(out_dir, "discovered_urls.jsonl")
-    with open(out_path, "w", encoding="utf-8") as f:
-        for u in sorted(discovered):
-            f.write(json.dumps({"url": u}) + "\n")
+    # Final save
+    _save_urls(discovered, out_dir)
+    LOGGER.info("Final save: %d URLs to discovered_urls.jsonl", len(discovered))
 
     return sorted(discovered)
 
