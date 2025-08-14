@@ -103,6 +103,17 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
         async def worker(u: str):
             async with sem:
                 try:
+                    # First, try to extract ID from URL to check if HTML already exists
+                    temp_data = extract_transcript("", u)  # Pass empty HTML to get ID
+                    html_dir = os.path.join(config.out_dir, "html")
+                    html_file = os.path.join(html_dir, f"{temp_data['id']}.html")
+                    
+                    # Skip if HTML file already exists
+                    if os.path.exists(html_file):
+                        stats["skipped"] += 1
+                        LOGGER.info("skipped %s: HTML file already exists", temp_data['id'])
+                        return
+                    
                     r = await fetch_with_retries(client, u, client_headers, limiter)
                     if r.status_code == 304:
                         stats["skipped"] += 1
@@ -111,9 +122,8 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                     data = extract_transcript(html, u)
                     
                     # Write raw html
-                    html_dir = os.path.join(config.out_dir, "html")
                     os.makedirs(html_dir, exist_ok=True)
-                    with open(os.path.join(html_dir, f"{data['id']}.html"), "w", encoding="utf-8") as f:
+                    with open(html_file, "w", encoding="utf-8") as f:
                         f.write(html)
 
                     t = {
