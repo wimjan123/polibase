@@ -20,7 +20,7 @@ def discover_urls(
     out_dir: str,
     state_dir: str,
     max_items: int = 1000,
-    idle_cycles: int = 5,
+    idle_cycles: int = 20,
     headless: bool = True,
 ) -> List[str]:
     os.makedirs(out_dir, exist_ok=True)
@@ -59,7 +59,7 @@ def discover_urls(
             clicked = _click_load_more(page)
             # Scroll down
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(1.0)
+            time.sleep(2.0)
             _collect_links(page, discovered)
 
             new_in_cycle = len(discovered) - last_count
@@ -106,7 +106,7 @@ def _click_load_more(page) -> bool:
                 txt = (b.inner_text() or "").strip().lower()
             except Exception:
                 continue
-            if txt in ("load more", "show more", "more", "loadmore"):
+            if txt in ("load more", "show more", "more", "loadmore", "next", "see more", "view more", "continue"):
                 b.click(timeout=2000)
                 time.sleep(0.5)
                 return True

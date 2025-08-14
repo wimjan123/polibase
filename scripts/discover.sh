@@ -7,7 +7,7 @@ OUT_DIR=${1:-out}
 START_URL=${2:-https://rollcall.com/factbase/transcripts/}
 
 echo "[discover] Discovering URLs from $START_URL into $OUT_DIR ..."
-factbase discover --start "$START_URL" --max-items 400 --out "$OUT_DIR" --state state || {
+factbase discover --start "$START_URL" --max-items 5000 --out "$OUT_DIR" --state state || {
   echo "[discover] Failed" >&2; exit 1;
 }
 
