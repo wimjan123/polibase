@@ -37,16 +37,9 @@ def discover_urls(
         context = browser.new_context(
             user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
-        network_log: list[dict] = []
-
-        def on_request(req):
-            if req.resource_type in ("xhr", "fetch"):
-                network_log.append({
-                    "url": req.url,
-                    "method": req.method,
-                })
-
-        context.on("request", on_request)
+        # Block images, CSS, fonts for faster loading
+        context.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,ttf,eot}", lambda route: route.abort())
+        # Removed network logging for speed
         page = context.new_page()
         page.set_default_navigation_timeout(10000)
         page.set_default_timeout(5000)
@@ -59,12 +52,11 @@ def discover_urls(
         last_count = 0
 
         while True:
-            _collect_links(page, discovered)
             # Handle load more if present
             clicked = _click_load_more(page)
-            # Scroll down
+            # Scroll down and collect in one pass
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(0.3)
+            time.sleep(0.1)
             _collect_links(page, discovered)
 
             new_in_cycle = len(discovered) - last_count
@@ -86,10 +78,9 @@ def discover_urls(
                 f.write(page.content())
             LOGGER.warning("Zero results discovered. Saved DOM to %s", html_dump)
 
-        # Persist endpoints
-        endpoints["observed_endpoints"] = network_log
+        # Persist endpoints (simplified)
         with open(os.path.join(state_dir, "endpoints.json"), "w", encoding="utf-8") as f:
-            json.dump(endpoints, f, indent=2)
+            json.dump({"start_url": start_url}, f)
 
         browser.close()
 
@@ -133,17 +124,12 @@ def _accept_consent(page) -> None:
 
 
 def _collect_links(page, discovered: Set[str]) -> None:
-    anchors = page.locator("a").all()
-    for a in anchors:
-        href = None
-        try:
-            href = a.get_attribute("href")
-        except Exception:
-            href = None
-        if not href:
-            continue
-        if href.startswith("/"):
-            href = page.url.split("//", 1)[0] + "//" + page.url.split("//", 1)[1].split("/", 1)[0] + href
-        if DETAIL_RE.match(href):
+    # Get all hrefs at once with evaluate
+    hrefs = page.evaluate("""
+        Array.from(document.querySelectorAll('a[href]')).map(a => a.href)
+    """)
+    
+    for href in hrefs:
+        if href and DETAIL_RE.match(href):
             discovered.add(href)
 
