@@ -37,8 +37,8 @@ def discover_urls(
         context = browser.new_context(
             user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
-        # Block images, CSS, fonts for faster loading
-        context.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,ttf,eot}", lambda route: route.abort())
+        # Block only images for faster loading (keep CSS/JS for functionality)
+        context.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot}", lambda route: route.abort())
         # Monitor network requests to debug infinite scroll
         network_requests = []
         def on_response(response):
@@ -69,14 +69,33 @@ def discover_urls(
             # Handle load more if present
             clicked = _click_load_more(page)
             
-            # Aggressive scrolling pattern for stubborn infinite scroll
-            for i in range(3):
+            # Try different scrolling approaches for infinite scroll
+            # Method 1: Multiple scroll attempts
+            for i in range(5):
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(0.2)
-                page.evaluate("window.scrollBy(0, -50)")
-                time.sleep(0.2)
+                time.sleep(0.1)
+                page.evaluate("window.scrollBy(0, -100)")
+                time.sleep(0.1)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(0.3)
+                time.sleep(0.1)
+                
+            # Method 2: Try dispatching scroll events manually
+            page.evaluate("""
+                window.dispatchEvent(new Event('scroll'));
+                window.dispatchEvent(new Event('scrollend'));
+            """)
+            
+            # Method 3: Trigger intersection observers manually if they exist
+            page.evaluate("""
+                const sentinels = document.querySelectorAll('[class*="sentinel"], [class*="load"], [id*="load"], [data-*="load"]');
+                sentinels.forEach(el => {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.top < window.innerHeight) {
+                        el.click();
+                        el.dispatchEvent(new Event('intersect'));
+                    }
+                });
+            """)
             
             # Wait longer for network requests and content loading
             time.sleep(2.0)
