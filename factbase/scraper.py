@@ -45,6 +45,11 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
     limiter = RateLimiter(config.rps)
     sem = asyncio.Semaphore(config.concurrency)
     stats = {"found": len(urls), "fetched": 0, "updated": 0, "skipped": 0, "failed": 0}
+    
+    # Progress tracking for long runs
+    import time
+    start_time = time.time()
+    last_progress = 0
 
     import sqlite3
     from .db import connect
@@ -65,7 +70,21 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
 
     # Batch processing for database operations
     db_batch = []
-    batch_size = 50
+    batch_size = 25  # Smaller batches for better responsiveness
+    
+    # Progress logging function
+    def log_progress():
+        nonlocal last_progress
+        total_processed = stats["fetched"] + stats["skipped"] + stats["failed"]
+        if total_processed > 0 and total_processed - last_progress >= 100:  # Log every 100 items
+            elapsed = time.time() - start_time
+            rate = total_processed / elapsed if elapsed > 0 else 0
+            remaining = len(urls) - total_processed
+            eta = remaining / rate if rate > 0 else 0
+            LOGGER.info(f"Progress: {total_processed}/{len(urls)} ({total_processed/len(urls)*100:.1f}%) - "
+                       f"Rate: {rate:.1f}/s - ETA: {eta/60:.1f}min - "
+                       f"Fetched: {stats['fetched']}, Skipped: {stats['skipped']}, Failed: {stats['failed']}")
+            last_progress = total_processed
     
     async def flush_batch():
         if not db_batch:
@@ -97,8 +116,12 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
     async with httpx.AsyncClient(
         follow_redirects=True, 
         headers=client_headers,
-        limits=httpx.Limits(max_keepalive_connections=config.concurrency, max_connections=config.concurrency * 2),
-        timeout=httpx.Timeout(60.0, connect=10.0)
+        limits=httpx.Limits(
+            max_keepalive_connections=config.concurrency, 
+            max_connections=config.concurrency * 2,
+            keepalive_expiry=30.0  # Refresh connections every 30s to prevent staleness
+        ),
+        timeout=httpx.Timeout(45.0, connect=8.0)  # Shorter timeouts to prevent hanging
     ) as client:
         async def worker(u: str):
             async with sem:
@@ -111,12 +134,13 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                     # Skip if HTML file already exists
                     if os.path.exists(html_file):
                         stats["skipped"] += 1
-                        LOGGER.info("skipped %s: HTML file already exists", temp_data['id'])
+                        log_progress()
                         return
                     
                     r = await fetch_with_retries(client, u, client_headers, limiter)
                     if r.status_code == 304:
                         stats["skipped"] += 1
+                        log_progress()
                         return
                     html = r.text
                     data = extract_transcript(html, u)
@@ -144,10 +168,16 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                             await flush_batch()
                     
                     stats["fetched"] += 1
-                    LOGGER.info("scraped %s: %d segments", t["id"], len(data.get("segments", [])))
+                    log_progress()
+                    
+                    # Memory cleanup for large HTML
+                    if len(html) > 1000000:  # 1MB threshold
+                        del html
+                        
                 except Exception as e:  # noqa: BLE001
                     LOGGER.exception("failed %s: %s", u, e)
                     stats["failed"] += 1
+                    log_progress()
 
         await asyncio.gather(*(worker(u) for u in urls))
         
