@@ -20,7 +20,7 @@ def discover_urls(
     out_dir: str,
     state_dir: str,
     max_items: int = 1000,
-    idle_cycles: int = 20,
+    idle_cycles: int = 10,
     headless: bool = True,
 ) -> List[str]:
     os.makedirs(out_dir, exist_ok=True)
@@ -52,23 +52,41 @@ def discover_urls(
         last_count = 0
 
         while True:
+            # Store current scroll position
+            prev_height = page.evaluate("document.body.scrollHeight")
+            
             # Handle load more if present
             clicked = _click_load_more(page)
-            # Scroll down and collect in one pass
+            
+            # Scroll down to trigger infinite scroll (multiple scrolls for stubborn sites)
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(0.1)
+            page.evaluate("window.scrollBy(0, -100)")  # Scroll up slightly
+            time.sleep(0.1)
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")  # Then back down
+            
+            # Wait for content to load (longer for infinite scroll)
+            time.sleep(0.5)
+            
+            # Check if page height increased (new content loaded)
+            new_height = page.evaluate("document.body.scrollHeight")
+            height_increased = new_height > prev_height
+            
             _collect_links(page, discovered)
 
             new_in_cycle = len(discovered) - last_count
             last_count = len(discovered)
-            LOGGER.info("discover: total=%d new=%d", last_count, new_in_cycle)
+            LOGGER.info("discover: total=%d new=%d height_grew=%s", last_count, new_in_cycle, height_increased)
 
             if len(discovered) >= max_items:
                 break
-            if not clicked and new_in_cycle == 0:
-                idle += 1
-            else:
+                
+            # Reset idle counter if we got new links OR page height increased
+            if clicked or new_in_cycle > 0 or height_increased:
                 idle = 0
+            else:
+                idle += 1
+                
             if idle >= idle_cycles:
                 break
 
