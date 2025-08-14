@@ -109,6 +109,12 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                         return
                     html = r.text
                     data = extract_transcript(html, u)
+                    
+                    # Write raw html
+                    html_dir = os.path.join(config.out_dir, "html")
+                    os.makedirs(html_dir, exist_ok=True)
+                    with open(os.path.join(html_dir, f"{data['id']}.html"), "w", encoding="utf-8") as f:
+                        f.write(html)
 
                     t = {
                         "id": data["id"],
