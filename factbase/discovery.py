@@ -39,12 +39,23 @@ def discover_urls(
         )
         # Block images, CSS, fonts for faster loading
         context.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2,ttf,eot}", lambda route: route.abort())
-        # Removed network logging for speed
+        # Monitor network requests to debug infinite scroll
+        network_requests = []
+        def on_response(response):
+            if 'json' in response.headers.get('content-type', ''):
+                network_requests.append({
+                    'url': response.url,
+                    'status': response.status,
+                    'headers': dict(response.headers)
+                })
+        context.on("response", on_response)
         page = context.new_page()
-        page.set_default_navigation_timeout(10000)
-        page.set_default_timeout(5000)
+        page.set_default_navigation_timeout(30000)
+        page.set_default_timeout(15000)
 
+        LOGGER.info("Loading %s...", start_url)
         page.goto(start_url)
+        LOGGER.info("Page loaded, accepting consent...")
         _accept_consent(page)
 
         new_in_cycle = 0
@@ -58,15 +69,17 @@ def discover_urls(
             # Handle load more if present
             clicked = _click_load_more(page)
             
-            # Scroll down to trigger infinite scroll (multiple scrolls for stubborn sites)
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(0.1)
-            page.evaluate("window.scrollBy(0, -100)")  # Scroll up slightly
-            time.sleep(0.1)
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")  # Then back down
+            # Aggressive scrolling pattern for stubborn infinite scroll
+            for i in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(0.2)
+                page.evaluate("window.scrollBy(0, -50)")
+                time.sleep(0.2)
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(0.3)
             
-            # Wait for content to load (longer for infinite scroll)
-            time.sleep(0.5)
+            # Wait longer for network requests and content loading
+            time.sleep(2.0)
             
             # Check if page height increased (new content loaded)
             new_height = page.evaluate("document.body.scrollHeight")
@@ -76,7 +89,14 @@ def discover_urls(
 
             new_in_cycle = len(discovered) - last_count
             last_count = len(discovered)
-            LOGGER.info("discover: total=%d new=%d height_grew=%s", last_count, new_in_cycle, height_increased)
+            LOGGER.info("discover: total=%d new=%d height_grew=%s idle=%d", last_count, new_in_cycle, height_increased, idle)
+            
+            # Log network requests if any
+            if network_requests:
+                LOGGER.info("Network requests this cycle: %d", len(network_requests))
+                for req in network_requests[-3:]:  # Show last 3
+                    LOGGER.info("  -> %s [%d]", req['url'], req['status'])
+                network_requests.clear()
 
             if len(discovered) >= max_items:
                 break
