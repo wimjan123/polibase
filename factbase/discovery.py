@@ -30,8 +30,13 @@ def discover_urls(
     endpoints: dict = {"start_url": start_url, "observed_endpoints": []}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context()
+        browser = p.chromium.launch(
+            headless=headless,
+            args=['--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage', '--no-sandbox']
+        )
+        context = browser.new_context(
+            user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
         network_log: list[dict] = []
 
         def on_request(req):
@@ -43,8 +48,8 @@ def discover_urls(
 
         context.on("request", on_request)
         page = context.new_page()
-        page.set_default_navigation_timeout(60000)
-        page.set_default_timeout(60000)
+        page.set_default_navigation_timeout(10000)
+        page.set_default_timeout(5000)
 
         page.goto(start_url)
         _accept_consent(page)
@@ -59,7 +64,7 @@ def discover_urls(
             clicked = _click_load_more(page)
             # Scroll down
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(2.0)
+            time.sleep(0.3)
             _collect_links(page, discovered)
 
             new_in_cycle = len(discovered) - last_count
@@ -107,8 +112,8 @@ def _click_load_more(page) -> bool:
             except Exception:
                 continue
             if txt in ("load more", "show more", "more", "loadmore", "next", "see more", "view more", "continue"):
-                b.click(timeout=2000)
-                time.sleep(0.5)
+                b.click(timeout=1000)
+                time.sleep(0.1)
                 return True
         return False
     except Exception:
@@ -120,8 +125,8 @@ def _accept_consent(page) -> None:
         for label in ["Accept", "I agree", "Agree", "Consent", "Continue"]:
             locator = page.get_by_text(label, exact=False)
             if locator.count() > 0:
-                locator.first.click(timeout=2000)
-                time.sleep(0.5)
+                locator.first.click(timeout=1000)
+                time.sleep(0.1)
                 break
     except Exception:
         pass
