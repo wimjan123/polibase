@@ -6,7 +6,7 @@ import os
 import re
 import signal
 import time
-from typing import List, Set
+from typing import List, Set, Optional, Tuple
 
 from playwright.sync_api import sync_playwright
 
@@ -15,11 +15,84 @@ LOGGER = logging.getLogger(__name__)
 
 DETAIL_RE = re.compile(r"^https?://rollcall\.com/factbase/.+/transcript/[a-z0-9\-]+/?$")
 
-def _save_urls(discovered: Set[str], out_dir: str) -> None:
-    """Save discovered URLs to JSONL file"""
+
+def _load_existing_urls(out_dir: str) -> List[str]:
     out_path = os.path.join(out_dir, "discovered_urls.jsonl")
+    if not os.path.exists(out_path):
+        return []
+    urls: List[str] = []
+    try:
+        with open(out_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    urls.append(json.loads(line).get("url", ""))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return [u for u in urls if u]
+
+
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _date_from_url(u: str) -> Optional[Tuple[int, int, int]]:
+    """Best-effort date extraction from slug for ordering.
+
+    Returns (YYYY, MM, DD) if found, else None.
+    """
+    slug = u.rstrip("/").split("/")[-1].lower()
+    # Try ISO-like in slug
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", slug)
+    if m:
+        try:
+            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            pass
+    # Try month-name-dd-yyyy
+    m2 = re.search(r"(january|february|march|april|may|june|july|august|september|october|november|december)-(\d{1,2})-(\d{4})",
+                   slug)
+    if m2:
+        try:
+            return (int(m2.group(3)), _MONTHS[m2.group(1)], int(m2.group(2)))
+        except Exception:
+            pass
+    return None
+
+def _save_urls(discovered: Set[str], out_dir: str) -> None:
+    """Merge-save discovered URLs to JSONL without dropping existing.
+
+    - Loads existing URLs (if any)
+    - Merges with current discoveries (dedup)
+    - Writes unique list ordered by parsed date desc (newest first),
+      falling back to existing order for undated items.
+    """
+    out_path = os.path.join(out_dir, "discovered_urls.jsonl")
+    existing = _load_existing_urls(out_dir)
+    existing_index = {u: i for i, u in enumerate(existing)}
+
+    merged = set(existing)
+    merged.update(discovered)
+
+    def sort_key(u: str):
+        d = _date_from_url(u)
+        # Sort by date desc first, then by original position asc (existing first),
+        # finally by URL for stability.
+        # Negate date for desc via tuple trick (not negating ints directly when None)
+        if d is not None:
+            y, m, dday = d
+            date_key = (y, m, dday)
+        else:
+            date_key = (0, 0, 0)
+        pos = existing_index.get(u, 10_000_000)
+        return (-date_key[0], -date_key[1], -date_key[2], pos, u)
+
+    ordered = sorted(merged, key=sort_key)
     with open(out_path, "w", encoding="utf-8") as f:
-        for u in sorted(discovered):
+        for u in ordered:
             f.write(json.dumps({"url": u}) + "\n")
 
 
@@ -210,4 +283,3 @@ def _collect_links(page, discovered: Set[str]) -> None:
     for href in hrefs:
         if href and DETAIL_RE.match(href):
             discovered.add(href)
-
