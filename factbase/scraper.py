@@ -50,6 +50,7 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
     import time
     start_time = time.time()
     last_progress = 0
+    failed_urls = set()  # Track URLs that repeatedly fail
 
     import sqlite3
     from .db import connect
@@ -119,13 +120,19 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
         limits=httpx.Limits(
             max_keepalive_connections=config.concurrency, 
             max_connections=config.concurrency * 2,
-            keepalive_expiry=30.0  # Refresh connections every 30s to prevent staleness
+            keepalive_expiry=15.0  # Shorter keepalive to prevent stale connections
         ),
-        timeout=httpx.Timeout(45.0, connect=8.0)  # Shorter timeouts to prevent hanging
+        timeout=httpx.Timeout(30.0, connect=5.0)  # Shorter timeouts to prevent hanging
     ) as client:
         async def worker(u: str):
             async with sem:
                 try:
+                    # Skip URLs that have failed multiple times
+                    if u in failed_urls:
+                        stats["skipped"] += 1
+                        log_progress()
+                        return
+                        
                     # First, try to extract ID from URL to check if HTML already exists
                     temp_data = extract_transcript("", u)  # Pass empty HTML to get ID
                     html_dir = os.path.join(config.out_dir, "html")
@@ -170,12 +177,15 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                     stats["fetched"] += 1
                     log_progress()
                     
-                    # Memory cleanup for large HTML
-                    if len(html) > 1000000:  # 1MB threshold
+                    # Enhanced memory cleanup
+                    if len(html) > 500000:  # 500KB threshold (lower)
                         del html
+                        import gc
+                        gc.collect()  # Force garbage collection for large responses
                         
                 except Exception as e:  # noqa: BLE001
                     LOGGER.exception("failed %s: %s", u, e)
+                    failed_urls.add(u)  # Track failed URL to skip in future
                     stats["failed"] += 1
                     log_progress()
 

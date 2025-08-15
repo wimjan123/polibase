@@ -71,20 +71,20 @@ async def fetch_with_retries(
     url: str,
     headers: dict,
     limiter: RateLimiter,
-    max_retries: int = 3,  # Reduced retries for speed
+    max_retries: int = 2,  # Further reduced retries to prevent freezing
 ) -> httpx.Response:
-    backoff = 0.1  # Faster initial backoff
+    backoff = 0.05  # Even faster initial backoff
     for attempt in range(max_retries + 1):
         await limiter.wait()
         try:
-            r = await client.get(url, headers=headers, timeout=45)  # Longer timeout for stability
+            r = await client.get(url, headers=headers, timeout=30)  # Aligned with scraper timeout
             if r.status_code in (429, 500, 502, 503, 504):
                 if attempt >= max_retries:
                     logger.warning("server busy after %d attempts: %s", attempt + 1, url)
                     raise httpx.HTTPStatusError("server busy", request=r.request, response=r)
                 # Exponential backoff only for server errors
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 1.5, 2.0)  # Faster backoff progression, lower max
+                backoff = min(backoff * 1.2, 1.0)  # Even faster backoff progression, lower max
                 continue
             return r
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
@@ -92,7 +92,7 @@ async def fetch_with_retries(
                 logger.warning("fetch failed %s after %d attempts: %s", url, attempt + 1, e)
                 raise
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 1.5, 2.0)
+            backoff = min(backoff * 1.2, 1.0)
         except Exception as e:  # noqa: BLE001
             logger.warning("fetch failed %s: %s", url, e)
             raise
