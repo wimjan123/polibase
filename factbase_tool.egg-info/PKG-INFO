@@ -27,8 +27,18 @@ Quickstart
 - Scrape and build the database: `sh scripts/scrape.sh`
 - Export JSONL and CSV: `sh scripts/export.sh`
 - Serve the Web UI at http://localhost:5000 (listens on all interfaces): `sh scripts/web.sh`
+- Serve the separate, nicer Web UI at http://localhost:5173: `sh scripts/webui.sh`
 - End-to-end: `sh scripts/run.sh`
 - Run tests: `sh scripts/test.sh`
+
+Separate Web UI
+
+- A standalone UI lives under `webui/` and runs independently from the main app.
+- It connects directly to the same SQLite database and provides:
+  - Transcript listing with dates, segment counts, and top speakers
+  - Detail view with clearly formatted timestamps, speakers, and text
+- Start it with: `sh scripts/webui.sh [out/transcripts.db [host [port]]]`
+  - Defaults: DB `out/transcripts.db`, host `0.0.0.0`, port `5173`.
 
 Configuration
 
