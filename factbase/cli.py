@@ -34,11 +34,12 @@ def _cfg(out: Optional[str] = None, state: Optional[str] = None, debug: bool = F
     return cfg
 
 
-@app.callback()
-def version_callback(version: Optional[bool] = typer.Option(None, "--version", callback=None, help="Show version and exit", is_eager=True)):
-    if version:
-        typer.echo(f"factbase-tool {__version__}")
-        raise typer.Exit()
+# Commented out problematic version callback
+# @app.callback()
+# def version_callback(version: bool = typer.Option(False, "--version", help="Show version and exit", is_eager=True)):
+#     if version:
+#         typer.echo(f"factbase-tool {__version__}")
+#         raise typer.Exit()
 
 
 @app.command()

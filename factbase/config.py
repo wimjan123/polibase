@@ -10,8 +10,8 @@ class Config:
     state_dir: str = os.getenv("FACTBASE_STATE", "state")
     logs_dir: str = os.getenv("FACTBASE_LOGS", "logs")
     user_agent: str = os.getenv(
-        "FACTBASE_UA", "factbase-tool/0.1 (+https://rollcall.com/factbase)"
+        "FACTBASE_UA", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
-    rps: float = float(os.getenv("FACTBASE_RPS", "1.0"))
-    concurrency: int = int(os.getenv("FACTBASE_CONCURRENCY", "4"))
+    rps: float = float(os.getenv("FACTBASE_RPS", "0.5"))
+    concurrency: int = int(os.getenv("FACTBASE_CONCURRENCY", "2"))
     debug: bool = os.getenv("FACTBASE_DEBUG", "0") in ("1", "true", "True")
