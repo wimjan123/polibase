@@ -54,7 +54,7 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
         "Cache-Control": "max-age=0",
-        "Referer": "https://rollcall.com/factbase/transcripts/",
+        "Referer": "https://rollcall.com/factbase/trump/search/",
     }
     limiter = RateLimiter(config.rps)
     stats = {"found": len(urls), "fetched": 0, "updated": 0, "skipped": 0, "failed": 0}
@@ -133,7 +133,6 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
             db_batch.clear()
 
             try:
-                conn.execute("BEGIN TRANSACTION")
                 for batch_item in batch_copy:
                     t, data = batch_item
                     upsert_transcript(conn, t)
@@ -142,10 +141,9 @@ async def scrape_all(config: Config, db_path: str, discovered_jsonl: str) -> dic
                     replace_speakers(conn, t["id"], data.get("speakers", []))
                     replace_topics(conn, t["id"], [{"topic": x, "score": None} for x in data.get("topics", [])])
                     replace_entities(conn, t["id"], data.get("entities", []))
-                conn.execute("COMMIT")
+                conn.commit()
                 stats["updated"] += len(batch_copy)
             except Exception as e:
-                conn.execute("ROLLBACK")
                 LOGGER.error("Batch DB operation failed: %s", e)
                 stats["failed"] += len(batch_copy)
 

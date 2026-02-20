@@ -4,10 +4,10 @@ set -eu
 . .venv/bin/activate || { echo "Activate venv first: . .venv/bin/activate"; exit 1; }
 
 OUT_DIR=${1:-out}
-START_URL=${2:-https://rollcall.com/factbase/transcripts/}
+SPEAKERS=${2:-trump,biden,harris}
 
-echo "[discover] Discovering URLs from $START_URL into $OUT_DIR ..."
-factbase discover --start "$START_URL" --max-items 5000 --out "$OUT_DIR" --state state || {
+echo "[discover] Discovering URLs for speakers: $SPEAKERS into $OUT_DIR ..."
+factbase discover --speakers "$SPEAKERS" --max-items 10000 --out "$OUT_DIR" --state state || {
   echo "[discover] Failed" >&2; exit 1;
 }
 
@@ -17,4 +17,3 @@ if [ "${COUNT:-0}" -eq 0 ]; then
   exit 2
 fi
 echo "[discover] Found $COUNT URLs"
-

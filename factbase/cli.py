@@ -44,8 +44,8 @@ def _cfg(out: Optional[str] = None, state: Optional[str] = None, debug: bool = F
 
 @app.command()
 def discover(
-    start: str = typer.Option("https://rollcall.com/factbase/transcripts/", help="Listing start URL"),
-    max_items: int = typer.Option(400, help="Max discovered items"),
+    speakers: str = typer.Option("trump,biden,harris", help="Comma-separated speaker names"),
+    max_items: int = typer.Option(10000, help="Max discovered items"),
     out: str = typer.Option("out", help="Output directory"),
     state: str = typer.Option("state", help="State directory"),
     debug: bool = typer.Option(False, help="Debug logging"),
@@ -53,7 +53,8 @@ def discover(
 ):
     """Discover transcript detail URLs and write out/discovered_urls.jsonl"""
     cfg = _cfg(out, state, debug)
-    urls = discover_urls(start, cfg.out_dir, cfg.state_dir, max_items=max_items, headless=headless)
+    speaker_list = [s.strip() for s in speakers.split(",") if s.strip()]
+    urls = discover_urls(out_dir=cfg.out_dir, state_dir=cfg.state_dir, max_items=max_items, headless=headless, speakers=speaker_list)
     typer.echo(f"Discovered {len(urls)} URLs -> {os.path.join(cfg.out_dir, 'discovered_urls.jsonl')}")
 
 
@@ -86,6 +87,119 @@ def export(
 
 
 @app.command()
+def reimport(
+    db: str = typer.Option("out/transcripts.db", help="SQLite DB path"),
+    out: str = typer.Option("out", help="Output directory"),
+    batch_size: int = typer.Option(50, help="Batch size for commits"),
+    debug: bool = typer.Option(False, help="Debug logging"),
+):
+    """Re-import existing HTML files that are missing from the database."""
+    from datetime import datetime
+    from .parser import extract_transcript
+    from .db import bulk_insert_segments, replace_entities, replace_speakers, replace_topics, upsert_transcript
+
+    cfg = _cfg(out, None, debug)
+    logger = logging.getLogger(__name__)
+
+    html_dir = os.path.join(out, "html")
+    if not os.path.exists(html_dir):
+        typer.echo(f"No HTML directory found at {html_dir}")
+        return
+
+    conn = connect(db)
+    init_db(conn)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+
+    # Get existing IDs
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM transcripts")
+    existing_ids = set(r[0] for r in cur.fetchall())
+
+    # Find HTML files
+    html_files = [f for f in os.listdir(html_dir) if f.endswith('.html')]
+    missing_files = [f for f in html_files if f.replace('.html', '') not in existing_ids]
+
+    typer.echo(f"Found {len(html_files)} HTML files, {len(existing_ids)} in DB, {len(missing_files)} missing")
+
+    if not missing_files:
+        typer.echo("Nothing to reimport")
+        return
+
+    imported = 0
+    failed = 0
+    batch = []
+
+    for i, filename in enumerate(missing_files):
+        try:
+            html_path = os.path.join(html_dir, filename)
+            transcript_id = filename.replace('.html', '')
+
+            # Reconstruct URL from ID
+            # Try to detect person from ID
+            if transcript_id.startswith('donald-trump'):
+                person = 'trump'
+            elif transcript_id.startswith('joe-biden'):
+                person = 'biden'
+            elif transcript_id.startswith('kamala-harris'):
+                person = 'harris'
+            else:
+                person = 'trump'  # default
+
+            url = f"https://rollcall.com/factbase/{person}/transcript/{transcript_id}"
+
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html = f.read()
+
+            data = extract_transcript(html, url)
+
+            t = {
+                "id": data["id"],
+                "url": data["url"],
+                "title": data.get("title"),
+                "date": data.get("date"),
+                "duration_seconds": data.get("duration_seconds"),
+                "full_text": data.get("full_text"),
+                "raw_html": html,
+                "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            }
+
+            batch.append((t, data))
+
+            if len(batch) >= batch_size:
+                _flush_batch(conn, batch)
+                imported += len(batch)
+                batch = []
+                typer.echo(f"Progress: {imported}/{len(missing_files)} imported")
+
+        except Exception as e:
+            logger.exception(f"Failed to reimport {filename}: {e}")
+            failed += 1
+
+    # Flush remaining
+    if batch:
+        _flush_batch(conn, batch)
+        imported += len(batch)
+
+    conn.close()
+    typer.echo(f"Reimport complete: {imported} imported, {failed} failed")
+
+
+def _flush_batch(conn, batch):
+    """Flush a batch of transcripts to the database."""
+    from .db import bulk_insert_segments, replace_entities, replace_speakers, replace_topics, upsert_transcript
+
+    for t, data in batch:
+        upsert_transcript(conn, t)
+        conn.execute("DELETE FROM segments WHERE transcript_id=?", (t["id"],))
+        bulk_insert_segments(conn, t["id"], data.get("segments", []))
+        replace_speakers(conn, t["id"], data.get("speakers", []))
+        replace_topics(conn, t["id"], [{"topic": x, "score": None} for x in data.get("topics", [])])
+        replace_entities(conn, t["id"], data.get("entities", []))
+    conn.commit()
+
+
+@app.command()
 def web(
     db: str = typer.Option("out/transcripts.db", help="SQLite DB path"),
     host: str = typer.Option("0.0.0.0", help="Host"),
@@ -99,8 +213,8 @@ def web(
 
 @app.command()
 def run(
-    start: str = typer.Option("https://rollcall.com/factbase/transcripts/", help="Start URL"),
-    max_items: int = typer.Option(400, help="Max discover items"),
+    speakers: str = typer.Option("trump,biden,harris", help="Comma-separated speaker names"),
+    max_items: int = typer.Option(10000, help="Max discover items"),
     out: str = typer.Option("out", help="Output dir"),
     state: str = typer.Option("state", help="State dir"),
     db: str = typer.Option("out/transcripts.db", help="DB path"),
@@ -116,7 +230,8 @@ def run(
     cfg.host = host
     cfg.port = port
     # Discover
-    discover_urls(start, cfg.out_dir, cfg.state_dir, max_items=max_items, headless=True)
+    speaker_list = [s.strip() for s in speakers.split(",") if s.strip()]
+    discover_urls(out_dir=cfg.out_dir, state_dir=cfg.state_dir, max_items=max_items, headless=True, speakers=speaker_list)
     # Scrape
     discovered_jsonl = os.path.join(cfg.out_dir, "discovered_urls.jsonl")
     asyncio.run(scrape_all(cfg, db, discovered_jsonl))
